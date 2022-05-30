@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "trace-uploader"
+version = "0.1.0"
+description = "Upload a trace to the analyzer and optionally run the report"
+authors = ["Cryptosense <support@cryptosense.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.9"
+
+[tool.poetry.dev-dependencies]
+black = "^22.3.0"
+flake8 = "^4.0.1"
+isort = "^5.10.1"
+mypy = "^0.950"
+pytest = "^6.2.5"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"

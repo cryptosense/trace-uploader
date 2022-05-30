@@ -1,0 +1,28 @@
+name: main
+
+on:
+  - pull_request
+  - push
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - 3.9
+        os:
+          - ubuntu-18.04
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Setup python
+        uses: actions/setup-python@v3
+      - name: Checkout code
+        uses: actions/checkout@v2
+      - name: Install poetry
+        run: |
+          pip3 install poetry
+      - name: Install dependencies
+        run: poetry install --no-interaction --no-root
+      - name: Run checks
+        run: poetry run make check
