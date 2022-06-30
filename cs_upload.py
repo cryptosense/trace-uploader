@@ -203,6 +203,14 @@ class S3Client:
         fields["success_action_status"] = str(fields["success_action_status"])
         fields["x-amz-meta-filename"] = basename(trace_file)
 
+        if trace_file.endswith(".cst.gz"):
+            mime_type = "application/gzip"
+        elif trace_file.endswith(".cst"):
+            mime_type = ""
+        else:
+            print("Trace file extension must be either .cst.gz or .cst")
+            exit(1)
+
         query = ["curl"]
         if self.ca_cert:
             query += ["--cacert", self.ca_cert]
@@ -210,7 +218,9 @@ class S3Client:
             query += ["--form", f"{key}={value}"]
         query += [
             "--form",
-            f"file=@{trace_file};type=application/gzip",
+            f"Content-Type={mime_type}",
+            "--form",
+            f"file=@{trace_file}",
             self.object_storage_url,
         ]
 
