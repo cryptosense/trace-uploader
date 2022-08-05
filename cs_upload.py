@@ -1,5 +1,6 @@
 import argparse
 from base64 import b64decode, b64encode
+from collections import defaultdict
 from json import dumps, loads
 import logging
 import os
@@ -16,24 +17,56 @@ from xml.etree import ElementTree
 logger = logging.getLogger(__name__)
 
 
-def initialize_logging(verbose: bool) -> None:
-    if sys.stderr.isatty() and os.name != "nt":
-        bold = "\033[1m"
-        dim = "\033[2m"
-        reset = "\033[0m"
-    else:
-        bold = ""
-        dim = ""
-        reset = ""
+class Colors:
+    BLUE = "\033[0;34m"
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
+    RED = "\033[0;31m"
+    RESET = "\033[0m"
+    YELLOW = "\033[1;33m"
 
-    logging.basicConfig(
-        level=(logging.DEBUG if verbose else logging.INFO),
-        format=(
-            f"{dim}%(asctime)s{reset}"
-            f" {dim}{bold}%(levelname)s{reset}"
-            f" %(message)s"
-        ),
+
+LEVEL_COLORS = {
+    logging.DEBUG: Colors.DIM,
+    logging.INFO: Colors.BLUE,
+    logging.WARNING: Colors.YELLOW,
+    logging.ERROR: Colors.RED,
+    logging.CRITICAL: Colors.RED,
+}
+
+
+def get_formatter(level: int) -> logging.Formatter:
+    if sys.stderr.isatty() and os.name != "nt":
+        dim = Colors.DIM
+        reset = Colors.RESET
+        bold = Colors.BOLD
+        level_colors = LEVEL_COLORS
+    else:
+        dim = ""
+        bold = ""
+        reset = ""
+        level_colors = defaultdict(lambda: "")
+
+    return logging.Formatter(
+        f"{dim}%(asctime)s{reset}"
+        f" {level_colors[level]}{bold}%(levelname)s{reset}"
+        f" %(message)s"
     )
+
+
+class Formatter(logging.Formatter):
+    def __init__(self) -> None:
+        self.formatters = {level: get_formatter(level) for level in LEVEL_COLORS}
+
+    def format(self, record: logging.LogRecord) -> str:
+        return self.formatters[record.levelno].format(record)
+
+
+def initialize_logging(verbose: bool) -> None:
+    handler = logging.StreamHandler()
+    handler.setFormatter(Formatter())
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(level=level, handlers=[handler])
 
 
 class GraphQLClient:
