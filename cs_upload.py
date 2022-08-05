@@ -1,13 +1,39 @@
 import argparse
 from base64 import b64decode, b64encode
 from json import dumps, loads
+import logging
+import os
 from os import getenv
 from os.path import basename, getsize
+import re
 from subprocess import CompletedProcess, run
+import sys
 from time import sleep
 from typing import Any, Mapping, Optional, Tuple
 from urllib.parse import urljoin
 from xml.etree import ElementTree
+
+logger = logging.getLogger(__name__)
+
+
+def initialize_logging(verbose: bool) -> None:
+    if sys.stderr.isatty() and os.name != "nt":
+        bold = "\033[1m"
+        dim = "\033[2m"
+        reset = "\033[0m"
+    else:
+        bold = ""
+        dim = ""
+        reset = ""
+
+    logging.basicConfig(
+        level=(logging.DEBUG if verbose else logging.INFO),
+        format=(
+            f"{dim}%(asctime)s{reset}"
+            f" {dim}{bold}%(levelname)s{reset}"
+            f" %(message)s"
+        ),
+    )
 
 
 class GraphQLClient:
@@ -44,14 +70,16 @@ class GraphQLClient:
         }
         response = self._post(data=dumps(data))
         if response.returncode != 0:
-            print(
+            logger.error(
                 f"System call to curl returned non-zero return code: {response.returncode}"
             )
             exit(1)
+
         response_json = loads(response.stdout.decode())
         if "errors" in response_json.keys():
-            print("Unexpected GraphQL response:")
-            print(dumps(response_json, indent=2))
+            logger.error(
+                f"Unexpected GraphQL response: \n{dumps(response_json, indent=2)}"
+            )
             exit(1)
         return response_json["data"]
 
@@ -60,11 +88,13 @@ class CsApiClient:
     graphql_client: GraphQLClient
 
     def __init__(self, api_key: str, api_url: str, ca_cert: Optional[str]):
+        logger.debug(f"Initializing API client (URL: {api_url}, CA cert: {ca_cert})")
         self.graphql_client = GraphQLClient(
             api_key=api_key, api_url=api_url, ca_cert=ca_cert
         )
 
     def generate_trace_upload_post(self) -> Tuple[str, str]:
+        logger.info("Getting presigned request from CAP")
         generate_trace_upload_query = """
             mutation {
                 generateTraceUploadPost(input: {}) {
@@ -78,7 +108,10 @@ class CsApiClient:
         form_data = response["generateTraceUploadPost"]["formData"]
         return (object_storage_url, form_data)
 
-    def create_trace(self, project_id: str, name: str, key: str, size: int) -> str:
+    def create_trace(self, project_id: int, name: str, key: str, size: int) -> int:
+        logger.info(
+            f"Registering trace in CAP (name: {name}, project ID: {project_id})"
+        )
         query = """
             mutation (
                 $projectId: ID!,
@@ -102,11 +135,19 @@ class CsApiClient:
         """
         response = self.graphql_client.query(
             query=query,
-            variables={"projectId": project_id, "name": name, "key": key, "size": size},
+            variables={
+                "projectId": to_global_id("Project", project_id),
+                "name": name,
+                "key": key,
+                "size": size,
+            },
         )
-        return response["createTrace"]["trace"]["id"]
+        return from_global_id("Trace", response["createTrace"]["trace"]["id"])
 
-    def generate_report(self, trace_id: str, profile_id: str) -> str:
+    def generate_report(self, trace_id: int, profile_id: int) -> int:
+        logger.info(
+            f"Generating report (trace ID: {trace_id}, profile ID: {profile_id})"
+        )
         query = """
             mutation ($traceId: ID!, $profileId: ID!) {
               analyze(
@@ -124,15 +165,18 @@ class CsApiClient:
         """
         response = self.graphql_client.query(
             query,
-            variables={"traceId": trace_id, "profileId": profile_id},
+            variables={
+                "traceId": to_global_id("Trace", trace_id),
+                "profileId": to_global_id("Profile", profile_id),
+            },
         )
-        return response["analyze"]["report"]["id"]
+        return from_global_id("Report", response["analyze"]["report"]["id"])
 
-    def wait_for_trace_done(self, trace_id: str) -> None:
+    def wait_for_trace_done(self, trace_id: int) -> None:
         finished = False
         while not finished:
             sleep(1)
-            print("Checking if trace upload is complete...")
+            logger.debug(f"Checking if trace upload is complete (ID: {trace_id})")
             result = self.graphql_client.query(
                 query="""
                     query TraceStatus($id: ID!) {
@@ -149,20 +193,23 @@ class CsApiClient:
                     }
                 """,
                 variables={
-                    "id": trace_id,
+                    "id": to_global_id("Trace", trace_id),
                 },
             )
             status = result["node"]["__typename"]
-            print(f"status = {status}")
             finished = (status == "TraceFailed") or (status == "TraceDone")
-        status = result["node"]["__typename"]
-        assert status == "TraceDone", f'Failed trace upload: {result["node"]["reason"]}'
+        logger.debug(f"Trace upload complete (ID: {trace_id}, status: {status})")
+        if status == "TraceFailed":
+            logger.error(
+                f"Trace upload failed (ID: {trace_id}, reason: {result['node']['reason']})"
+            )
+            exit(1)
 
-    def wait_for_report_done(self, report_id: str) -> None:
+    def wait_for_report_done(self, report_id: int) -> None:
         finished = False
         while not finished:
             sleep(1)
-            print("Checking if report is complete...")
+            logger.debug(f"Checking if report is complete (ID: {report_id})")
             result = self.graphql_client.query(
                 query="""
                     query ReportStatus($id: ID!) {
@@ -179,14 +226,17 @@ class CsApiClient:
                     }
                 """,
                 variables={
-                    "id": report_id,
+                    "id": to_global_id("Report", report_id),
                 },
             )
             status = result["node"]["__typename"]
-            print(f"status = {status}")
             finished = (status == "ReportFailed") or (status == "ReportDone")
-        status = result["node"]["__typename"]
-        assert status == "ReportDone", f'Failed report: {result["node"]["reason"]}'
+        logger.debug(f"Report complete (ID: {report_id}, status: {status})")
+        if status == "TraceFailed":
+            logger.error(
+                f"Analysis failed (ID: {report_id}, reason: {result['node']['reason']})"
+            )
+            exit(1)
 
 
 class S3Client:
@@ -208,7 +258,10 @@ class S3Client:
         elif trace_file.endswith(".cst"):
             mime_type = ""
         else:
-            print("Trace file extension must be either .cst.gz or .cst")
+            print(
+                "Trace file extension must be either .cst.gz or .cst",
+                file=sys.stderr,
+            )
             exit(1)
 
         query = ["curl"]
@@ -227,8 +280,9 @@ class S3Client:
         response = run(query, capture_output=True)
 
         if response.returncode != 0:
-            print("S3 upload failed")
-            print(f"status code = {response.returncode}")
+            logger.error(
+                "Upload to object storage failed (status code: {response.returncode})"
+            )
             exit(1)
 
         xml_key = ElementTree.fromstring(response.stdout.decode()).find("Key")
@@ -254,12 +308,19 @@ def to_global_id(type_: str, id_: int) -> str:
 
 
 def from_global_id(type_: str, id_: str) -> int:
-    temp_ = b64decode(id_).decode()
-    return int(temp_[len(type_) + 1 :])
+    decoded = b64decode(id_.encode()).decode()
+    match = re.match(rf"^{type_}:(?P<id>\d+)$", decoded)
+    assert match is not None, "Invalid type or format"
+    return int(match.groupdict()["id"])
 
 
 def main():
     parser = argparse.ArgumentParser(description="Cryptosense API client")
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Trace or scan file to upload.",
+    )
     parser.add_argument(
         "--trace-file",
         type=str,
@@ -285,55 +346,40 @@ def main():
     project_id = args.project_id
     profile_id = args.profile_id
 
+    initialize_logging(verbose=args.verbose)
+
     api_key = getenv_or_exit("CS_API_KEY")
     root_url = getenv_or_exit("CS_ROOT_URL")
     ca_cert = getenv("CS_CA_CERT")
 
-    print(f"trace_file = {trace_file_name}")
-    print(f"project_id = {project_id}")
-    print("CS_API_KEY found")
-    print(f"CS_ROOT_URL = {root_url}")
-    if ca_cert:
-        print(f"CS_CA_CERT = {ca_cert}")
-    else:
-        print("No CA cert provided")
-
-    opaque_project_id = to_global_id(type_="Project", id_=project_id)
-    trace_name = basename(trace_file_name)
-
-    print(f"Trace name = {trace_name}")
-
     api_url = urljoin(root_url, "/api/v2")
-    print(f"API URL = {api_url}")
     api_client = CsApiClient(api_key=api_key, api_url=api_url, ca_cert=ca_cert)
 
     (object_storage_url, form_data) = api_client.generate_trace_upload_post()
-    print(f"Object storage URL = {object_storage_url}")
+    logger.info(f"Using object storage URL: {object_storage_url}")
     s3_client = S3Client(object_storage_url=object_storage_url, ca_cert=ca_cert)
     s3_client.upload_to_s3(form_data, trace_file_name)
     s3_key = s3_client.get_key()
 
     size = getsize(trace_file_name)
-    print(f"Trace file size = {size} bytes")
+    trace_name = basename(trace_file_name)
+    trace_id = api_client.create_trace(
+        project_id=project_id,
+        name=trace_name,
+        key=s3_key,
+        size=size,
+    )
+    api_client.wait_for_trace_done(trace_id=trace_id)
 
-    trace_id = api_client.create_trace(opaque_project_id, trace_name, s3_key, size)
-    api_client.wait_for_trace_done(trace_id)
-
-    actual_trace_id = from_global_id(type_="Trace", id_=trace_id)
-    trace_url = urljoin(root_url, f"/project/{project_id}/traces/{actual_trace_id}")
-    print(f"Trace available at {trace_url}")
+    trace_url = urljoin(root_url, f"/project/{project_id}/traces/{trace_id}")
+    logger.info(f"Trace available at {trace_url}")
 
     if profile_id is not None:
-        print(f"profile_id = {profile_id}")
-
-        opaque_profile_id = to_global_id(type_="Profile", id_=profile_id)
-
-        report_id = api_client.generate_report(trace_id, opaque_profile_id)
+        report_id = api_client.generate_report(trace_id=trace_id, profile_id=profile_id)
         api_client.wait_for_report_done(report_id)
 
-        actual_report_id = from_global_id(type_="Report", id_=report_id)
-        report_url = urljoin(root_url, f"/report/{actual_report_id}/inventory")
-        print(f"Report available at {report_url}")
+        report_url = urljoin(root_url, f"/report/{report_id}/inventory")
+        logger.info(f"Report available at {report_url}")
 
 
 if __name__ == "__main__":
