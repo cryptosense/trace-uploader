@@ -1,9 +1,9 @@
+import argparse
 from base64 import b64decode, b64encode
 from json import dumps, loads
 from os import getenv
 from os.path import basename, getsize
 from subprocess import CompletedProcess, run
-from sys import argv, exit
 from time import sleep
 from typing import Any, Mapping, Optional, Tuple
 from urllib.parse import urljoin
@@ -259,16 +259,35 @@ def from_global_id(type_: str, id_: str) -> int:
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Cryptosense API client")
+    parser.add_argument(
+        "--trace-file",
+        type=str,
+        required=True,
+        help="Trace or scan file to upload.",
+    )
+    parser.add_argument(
+        "--project-id",
+        type=int,
+        required=True,
+        help="Numerical ID of the project the trace file should be added to.",
+    )
+    parser.add_argument(
+        "--profile-id",
+        type=int,
+        help="""
+            Numerical ID of the project to use for analysis. Specifying this argument
+            triggers an analysis after trace upload.
+        """,
+    )
+    args = parser.parse_args()
+    trace_file_name = args.trace_file
+    project_id = args.project_id
+    profile_id = args.profile_id
+
     api_key = getenv_or_exit("CS_API_KEY")
     root_url = getenv_or_exit("CS_ROOT_URL")
     ca_cert = getenv("CS_CA_CERT")
-
-    if len(argv) < 3:
-        print(f"Usage: {basename(argv[0])} <trace-file> <project-id> [<profile-id>]")
-        exit(1)
-
-    trace_file_name = argv[1]
-    project_id = int(argv[2])
 
     print(f"trace_file = {trace_file_name}")
     print(f"project_id = {project_id}")
@@ -304,8 +323,7 @@ def main():
     trace_url = urljoin(root_url, f"/project/{project_id}/traces/{actual_trace_id}")
     print(f"Trace available at {trace_url}")
 
-    if len(argv) > 3:
-        profile_id = int(argv[3])
+    if profile_id is not None:
         print(f"profile_id = {profile_id}")
 
         opaque_profile_id = to_global_id(type_="Profile", id_=profile_id)
