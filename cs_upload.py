@@ -141,7 +141,14 @@ class CsApiClient:
         form_data = response["generateTraceUploadPost"]["formData"]
         return (object_storage_url, form_data)
 
-    def create_trace(self, project_id: int, name: str, key: str, size: int) -> int:
+    def create_trace(
+        self,
+        project_id: int,
+        slot_name: Optional[str],
+        name: str,
+        key: str,
+        size: int,
+    ) -> int:
         logger.info(
             f"Registering trace in CAP (name: {name}, project ID: {project_id})"
         )
@@ -149,13 +156,15 @@ class CsApiClient:
             mutation (
                 $projectId: ID!,
                 $name: String!,
+                $slotName: String,
                 $key: String!,
-                $size: Int!
+                $size: Int!,
             ) {
                 createTrace(
                     input: {
                         projectId: $projectId,
                         name: $name,
+                        defaultSlotName: $slotName,
                         key: $key,
                         size: $size
                     }
@@ -171,6 +180,7 @@ class CsApiClient:
             variables={
                 "projectId": to_global_id("Project", project_id),
                 "name": name,
+                "slotName": slot_name,
                 "key": key,
                 "size": size,
             },
@@ -367,6 +377,11 @@ def main():
         help="Numerical ID of the project the trace file should be added to.",
     )
     parser.add_argument(
+        "--slot-name",
+        type=str,
+        help="Name of the (existing or not) slot the trace should be added to.",
+    )
+    parser.add_argument(
         "--profile-id",
         type=int,
         help="""
@@ -374,10 +389,15 @@ def main():
             triggers an analysis after trace upload.
         """,
     )
+    parser.add_argument(
+        "--trace-name", type=str, help="Name of the trace that will be created."
+    )
     args = parser.parse_args()
     trace_file_name = args.trace_file
+    trace_name = args.trace_name
     project_id = args.project_id
     profile_id = args.profile_id
+    slot_name = args.slot_name
 
     initialize_logging(verbose=args.verbose)
 
@@ -395,9 +415,12 @@ def main():
     s3_key = s3_client.get_key()
 
     size = getsize(trace_file_name)
-    trace_name = basename(trace_file_name)
+    if trace_name is None:
+        trace_name = basename(trace_file_name)
+
     trace_id = api_client.create_trace(
         project_id=project_id,
+        slot_name=slot_name,
         name=trace_name,
         key=s3_key,
         size=size,
