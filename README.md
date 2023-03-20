@@ -34,6 +34,7 @@ python cs_upload.py --trace-file foo.cst.gz ...
 ### Command-line arguments
 
 - `--trace-file` (required): trace file to upload
+- `--trace-name` (optional): name of the trace created. Defaults to the file name.
 - `--project-number` (required): the number of the project to upload to. You can find this
   in the web UI if you navigate to that project and then look in the URL, for example in
   `https://[]/project/1022/dashboard`, the trace number is 1022.
@@ -42,6 +43,9 @@ python cs_upload.py --trace-file foo.cst.gz ...
   you want, navigate to `/organization/profiles` and then select an appropriate profile.
   In `/organization/profiles/211` or `/organization/profiles/211/detail`, the profile
   number is 211.
+- `--slot-name` (optional): name of the (existing or not) slot the trace should be uploaded
+  to. Without it, the API uses the first existing compatible slot it finds. If none exists 
+  yet, it will use the trace type as the name of the new slot.
 
 ## How to get your server certificate
 
