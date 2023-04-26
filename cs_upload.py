@@ -344,9 +344,11 @@ class S3Client:
             mime_type = "application/gzip"
         elif trace_file.endswith(".cst"):
             mime_type = ""
+        elif trace_file.endswith(".pcap"):
+            mime_type = "application/octet-stream"
         else:
             print(
-                "Trace file extension must be either .cst.gz or .cst",
+                "Trace file extension must be either .pacp, .cst.gz or .cst",
                 file=sys.stderr,
             )
             exit(1)
@@ -357,15 +359,27 @@ class S3Client:
         if not self.check_ca_cert:
             query += ["--insecure"]
         query += ["-X", self.upload_method]
-        for key, value in fields.items():
-            query += ["--form", f"{key}={value}"]
-        query += [
-            "--form",
-            f"Content-Type={mime_type}",
-            "--form",
-            f"file=@{trace_file}",
-            self.object_storage_url,
-        ]
+        if self.upload_method == "POST":
+            for key, value in fields.items():
+                query += ["--form", f"{key}={value}"]
+            query += [
+                "--form",
+                f"Content-Type={mime_type}",
+                "--form",
+                f"file=@{trace_file}",
+                self.object_storage_url,
+            ]
+        elif self.upload_method == "PUT":
+            query += [
+                "--header",
+                "Content-Type: application/octet-stream",
+                "--data-binary",
+                f"@{trace_file}",
+                self.object_storage_url,
+            ]
+        else:
+            logger.error(f"Unknown upload method: {self.upload_method}")
+            exit(1)
 
         response = run(query, capture_output=True)
         if response.returncode != 0:
