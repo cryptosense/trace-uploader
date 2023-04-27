@@ -10,7 +10,7 @@ import re
 from subprocess import CompletedProcess, run
 import sys
 from time import sleep
-from typing import Any, Mapping, Optional, Tuple
+from typing import Any, Dict, Mapping, Optional, Tuple
 from urllib.parse import urljoin, urlsplit
 from xml.etree import ElementTree
 
@@ -121,7 +121,7 @@ class GraphQLClient:
         return run(query, capture_output=True)
 
     def query(
-        self, query: str, variables: Mapping[str, Any] = None
+        self, query: str, variables: Optional[Mapping[str, Any]] = None
     ) -> Mapping[str, Any]:
         data = {
             "query": query,
@@ -526,7 +526,7 @@ def main():
         )
     else:
         object_storage_url = put_url
-        form_data = []
+        form_data: Dict[str, str] = {}  # type: ignore [no-redef]
         s3_client = S3Client(
             object_storage_url=object_storage_url,
             ca_cert=ca_cert,
