@@ -154,7 +154,9 @@ class CsApiClient:
         check_ca_cert: bool = True,
     ):
         if ca_cert:
-            logger.debug(f"Initializing API client (URL: {api_url}, CA cert: {ca_cert})")
+            logger.debug(
+                f"Initializing API client (URL: {api_url}, CA cert: {ca_cert})"
+            )
         elif not check_ca_cert:
             logger.debug(f"Initializing API client (URL: {api_url}, no CA check)")
         else:
@@ -511,7 +513,11 @@ def main():
     )
 
     if not put_url:
-        (object_storage_url, form_data, method) = api_client.generate_trace_upload_post()
+        (
+            object_storage_url,
+            form_data,
+            method,
+        ) = api_client.generate_trace_upload_post()
         s3_client = S3Client(
             object_storage_url=object_storage_url,
             ca_cert=ca_cert,
