@@ -153,7 +153,12 @@ class CsApiClient:
         ca_cert: Optional[str],
         check_ca_cert: bool = True,
     ):
-        logger.debug(f"Initializing API client (URL: {api_url}, CA cert: {ca_cert})")
+        if ca_cert:
+            logger.debug(f"Initializing API client (URL: {api_url}, CA cert: {ca_cert})")
+        elif not check_ca_cert:
+            logger.debug(f"Initializing API client (URL: {api_url}, no CA check)")
+        else:
+            logger.debug(f"Initializing API client (URL: {api_url})")
         self.graphql_client = GraphQLClient(
             api_key=api_key,
             api_url=api_url,
@@ -161,20 +166,22 @@ class CsApiClient:
             check_ca_cert=check_ca_cert,
         )
 
-    def generate_trace_upload_post(self) -> Tuple[str, str]:
+    def generate_trace_upload_post(self) -> Tuple[str, str, str]:
         logger.info("Getting presigned request from CAP")
         generate_trace_upload_query = """
             mutation {
                 generateTraceUploadPost(input: {}) {
                     url
                     formData
+                    method
                 }
             }
         """
         response = self.graphql_client.query(query=generate_trace_upload_query)
         object_storage_url = response["generateTraceUploadPost"]["url"]
         form_data = response["generateTraceUploadPost"]["formData"]
-        return (object_storage_url, form_data)
+        method = response["generateTraceUploadPost"]["method"]
+        return (object_storage_url, form_data, method)
 
     def create_trace(
         self,
@@ -333,19 +340,13 @@ class S3Client:
         self.check_ca_cert = check_ca_cert
         self.upload_method = upload_method
 
-    def upload_to_s3(self, form_data: Optional[str], trace_file: str) -> None:
-        fields = {}
-        if form_data:
-            fields = loads(form_data)
-            fields["success_action_status"] = str(fields["success_action_status"])
-            fields["x-amz-meta-filename"] = basename(trace_file)
-
+    def mime_type(self, trace_file: str) -> str:
         if trace_file.endswith(".cst.gz"):
-            mime_type = "application/gzip"
+            return "application/gzip"
         elif trace_file.endswith(".cst"):
-            mime_type = ""
+            return ""
         elif trace_file.endswith(".pcap"):
-            mime_type = "application/octet-stream"
+            return "application/octet-stream"
         else:
             print(
                 "Trace file extension must be either .pacp, .cst.gz or .cst",
@@ -353,6 +354,14 @@ class S3Client:
             )
             exit(1)
 
+    def upload_to_s3(self, form_data: Optional[str], trace_file: str) -> None:
+        fields = {}
+        if form_data:
+            fields = loads(form_data)
+            fields["success_action_status"] = str(fields["success_action_status"])
+            fields["x-amz-meta-filename"] = basename(trace_file)
+
+        mime_type = self.mime_type(trace_file)
         query = ["curl"]
         if self.ca_cert and self.check_ca_cert:
             query += ["--cacert", self.ca_cert]
@@ -502,11 +511,12 @@ def main():
     )
 
     if not put_url:
-        (object_storage_url, form_data) = api_client.generate_trace_upload_post()
+        (object_storage_url, form_data, method) = api_client.generate_trace_upload_post()
         s3_client = S3Client(
             object_storage_url=object_storage_url,
             ca_cert=ca_cert,
             check_ca_cert=check_ca_cert,
+            upload_method=method,
         )
     else:
         object_storage_url = put_url
