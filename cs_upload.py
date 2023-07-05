@@ -137,7 +137,7 @@ class GraphQLClient:
         try:
             response_json = loads(response.stdout.decode())
         except decoder.JSONDecodeError:
-            print(f"Expected JSON response, got: {response.stdout}")
+            logging.error(f"Expected JSON response, got: {response.stdout}")
             raise
         if "errors" in response_json.keys():
             logger.error(
@@ -355,7 +355,7 @@ class S3Client:
             return "application/octet-stream"
         else:
             print(
-                "Trace file extension must be either .pacp, .cst.gz or .cst",
+                "Trace file extension must be either .pcap, .cst.gz or .cst",
                 file=sys.stderr,
             )
             exit(1)
