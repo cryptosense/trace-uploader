@@ -1,7 +1,7 @@
 import argparse
 from base64 import b64decode, b64encode
 from collections import defaultdict
-from json import dumps, loads
+from json import dumps, loads, decoder
 import logging
 import os
 from os import getenv
@@ -134,7 +134,11 @@ class GraphQLClient:
             )
             exit(1)
 
-        response_json = loads(response.stdout.decode())
+        try:
+            response_json = loads(response.stdout.decode())
+        except decoder.JSONDecodeError:
+            print(f"Expected JSON response, got: {response.stdout}")
+            raise
         if "errors" in response_json.keys():
             logger.error(
                 f"Unexpected GraphQL response: \n{dumps(response_json, indent=2)}"
@@ -168,7 +172,7 @@ class CsApiClient:
             check_ca_cert=check_ca_cert,
         )
 
-    def generate_trace_upload_post(self) -> Tuple[str, str, str]:
+    def generate_trace_upload(self) -> Tuple[str, str, str]:
         logger.info("Getting presigned request from CAP")
         generate_trace_upload_query = """
             mutation {
@@ -360,8 +364,10 @@ class S3Client:
         fields = {}
         if form_data:
             fields = loads(form_data)
-            fields["success_action_status"] = str(fields["success_action_status"])
-            fields["x-amz-meta-filename"] = basename(trace_file)
+            if "success_action_status" in fields:
+                fields["success_action_status"] = str(fields["success_action_status"])
+            if "x-amz-meta-filename" in fields:
+                fields["x-amz-meta-filename"] = basename(trace_file)
 
         mime_type = self.mime_type(trace_file)
         query = ["curl"]
@@ -452,7 +458,7 @@ def main():
     parser.add_argument(
         "--verbose",
         action="store_true",
-        help="Trace or scan file to upload.",
+        help="Print out more detailed logging",
     )
     parser.add_argument(
         "--insecure",
@@ -487,18 +493,12 @@ def main():
     parser.add_argument(
         "--trace-name", type=str, help="Name of the trace that will be created."
     )
-    parser.add_argument(
-        "--put-url",
-        type=str,
-        help="Directly use a provided PUT url instead of querying a new signature.",
-    )
     args = parser.parse_args()
     trace_file_name = args.trace_file
     trace_name = args.trace_name
     project_id = args.project_id
     profile_id = args.profile_id
     slot_name = args.slot_name
-    put_url = args.put_url
     check_ca_cert = not args.insecure
 
     initialize_logging(verbose=args.verbose)
@@ -512,27 +512,18 @@ def main():
         api_key=api_key, api_url=api_url, ca_cert=ca_cert, check_ca_cert=check_ca_cert
     )
 
-    if not put_url:
-        (
-            object_storage_url,
-            form_data,
-            method,
-        ) = api_client.generate_trace_upload_post()
-        s3_client = S3Client(
-            object_storage_url=object_storage_url,
-            ca_cert=ca_cert,
-            check_ca_cert=check_ca_cert,
-            upload_method=method,
-        )
-    else:
-        object_storage_url = put_url
-        form_data: Dict[str, str] = {}  # type: ignore [no-redef]
-        s3_client = S3Client(
-            object_storage_url=object_storage_url,
-            ca_cert=ca_cert,
-            upload_method="PUT",
-            check_ca_cert=check_ca_cert,
-        )
+    (
+        object_storage_url,
+        form_data,
+        method,
+    ) = api_client.generate_trace_upload()
+    logger.debug(f"Using upload method {method}")
+    s3_client = S3Client(
+        object_storage_url=object_storage_url,
+        ca_cert=ca_cert,
+        check_ca_cert=check_ca_cert,
+        upload_method=method,
+    )
     logger.info(f"Using object storage URL: {object_storage_url}")
     s3_client.upload_to_s3(form_data, trace_file_name)
     s3_key = s3_client.get_key()
