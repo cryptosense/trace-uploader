@@ -1,7 +1,7 @@
 import argparse
 from base64 import b64decode, b64encode
 from collections import defaultdict
-from json import dumps, loads, decoder
+from json import decoder, dumps, loads
 import logging
 import os
 from os import getenv
@@ -10,7 +10,7 @@ import re
 from subprocess import CompletedProcess, run
 import sys
 from time import sleep
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import Any, Mapping, Optional, Tuple
 from urllib.parse import urljoin, urlsplit
 from xml.etree import ElementTree
 
