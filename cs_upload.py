@@ -1,7 +1,9 @@
 import argparse
 from base64 import b64decode, b64encode
 from collections import defaultdict
-from json import dumps, loads
+from dataclasses import dataclass
+from enum import Enum, auto
+from json import decoder, dumps, loads
 import logging
 import os
 from os import getenv
@@ -10,8 +12,8 @@ import re
 from subprocess import CompletedProcess, run
 import sys
 from time import sleep
-from typing import Any, Mapping, Optional, Tuple
-from urllib.parse import urljoin
+from typing import Any, Mapping, Optional
+from urllib.parse import urljoin, urlsplit
 from xml.etree import ElementTree
 
 logger = logging.getLogger(__name__)
@@ -69,20 +71,41 @@ def initialize_logging(verbose: bool) -> None:
     logging.basicConfig(level=level, handlers=[handler])
 
 
+class UploadMethod(Enum):
+    POST = auto()
+    PUT = auto()
+
+
+@dataclass(frozen=True)
+class UploadInfo:
+    object_storage_url: str
+    form_data: str
+    method: UploadMethod
+
+
 class GraphQLClient:
     api_key: str
     api_url: str
     ca_cert: Optional[str]
 
-    def __init__(self, api_key: str, api_url: str, ca_cert: Optional[str]):
+    def __init__(
+        self,
+        api_key: str,
+        api_url: str,
+        ca_cert: Optional[str],
+        no_check_certificate: bool = False,
+    ):
         self.api_key = api_key
         self.api_url = api_url
         self.ca_cert = ca_cert
+        self.no_check_certificate = no_check_certificate
 
     def _post(self, data: str) -> CompletedProcess:
         query = ["curl", "--request", "POST"]
-        if self.ca_cert:
+        if self.ca_cert and not self.no_check_certificate:
             query += ["--cacert", f"{self.ca_cert}"]
+        if self.no_check_certificate:
+            query += ["--insecure"]
         query += [
             "--header",
             f"API-KEY: {self.api_key}",
@@ -95,7 +118,7 @@ class GraphQLClient:
         return run(query, capture_output=True)
 
     def query(
-        self, query: str, variables: Mapping[str, Any] = None
+        self, query: str, variables: Optional[Mapping[str, Any]] = None
     ) -> Mapping[str, Any]:
         data = {
             "query": query,
@@ -108,7 +131,11 @@ class GraphQLClient:
             )
             exit(1)
 
-        response_json = loads(response.stdout.decode())
+        try:
+            response_json = loads(response.stdout.decode())
+        except decoder.JSONDecodeError:
+            logging.error(f"Expected JSON response, got: {response.stdout}")
+            raise
         if "errors" in response_json.keys():
             logger.error(
                 f"Unexpected GraphQL response: \n{dumps(response_json, indent=2)}"
@@ -120,26 +147,56 @@ class GraphQLClient:
 class CsApiClient:
     graphql_client: GraphQLClient
 
-    def __init__(self, api_key: str, api_url: str, ca_cert: Optional[str]):
-        logger.debug(f"Initializing API client (URL: {api_url}, CA cert: {ca_cert})")
+    def __init__(
+        self,
+        api_key: str,
+        api_url: str,
+        ca_cert: Optional[str],
+        no_check_certificate: bool = False,
+    ):
+        if ca_cert:
+            logger.debug(
+                f"Initializing API client (URL: {api_url}, CA cert: {ca_cert})"
+            )
+        elif not no_check_certificate:
+            logger.debug(f"Initializing API client (URL: {api_url}, no CA check)")
+        else:
+            logger.debug(f"Initializing API client (URL: {api_url})")
         self.graphql_client = GraphQLClient(
-            api_key=api_key, api_url=api_url, ca_cert=ca_cert
+            api_key=api_key,
+            api_url=api_url,
+            ca_cert=ca_cert,
+            no_check_certificate=no_check_certificate,
         )
 
-    def generate_trace_upload_post(self) -> Tuple[str, str]:
+    def generate_trace_upload(self) -> UploadInfo:
         logger.info("Getting presigned request from CAP")
         generate_trace_upload_query = """
             mutation {
                 generateTraceUploadPost(input: {}) {
                     url
                     formData
+                    method
                 }
             }
         """
         response = self.graphql_client.query(query=generate_trace_upload_query)
         object_storage_url = response["generateTraceUploadPost"]["url"]
         form_data = response["generateTraceUploadPost"]["formData"]
-        return (object_storage_url, form_data)
+        if response["generateTraceUploadPost"]["method"] == "POST":
+            method = UploadMethod.POST
+        elif response["generateTraceUploadPost"]["method"] == "PUT":
+            method = UploadMethod.PUT
+        else:
+            logger.error(
+                f'Unknown upload method: {response["generateTraceUploadPost"]["method"]}'
+            )
+            exit(1)
+        return UploadInfo(
+            object_storage_url=object_storage_url,
+            form_data=form_data,
+            method=method,
+        )
 
     def create_trace(
         self,
@@ -286,51 +343,96 @@ class S3Client:
     object_storage_url: str
     ca_cert: Optional[str]
 
-    def __init__(self, object_storage_url: str, ca_cert: Optional[str]):
+    def __init__(
+        self,
+        object_storage_url: str,
+        ca_cert: Optional[str],
+        upload_method: UploadMethod,
+        no_check_certificate: bool = False,
+    ):
         self.object_storage_url = object_storage_url
         self.ca_cert = ca_cert
+        self.no_check_certificate = no_check_certificate
+        self.upload_method = upload_method
 
-    def upload_to_s3(self, form_data: str, trace_file: str) -> None:
-        fields = loads(form_data)
-
-        fields["success_action_status"] = str(fields["success_action_status"])
-        fields["x-amz-meta-filename"] = basename(trace_file)
-
+    def mime_type(self, trace_file: str) -> str:
         if trace_file.endswith(".cst.gz"):
-            mime_type = "application/gzip"
+            return "application/gzip"
         elif trace_file.endswith(".cst"):
-            mime_type = ""
+            return ""
+        elif trace_file.endswith(".pcap"):
+            return "application/octet-stream"
         else:
             print(
-                "Trace file extension must be either .cst.gz or .cst",
+                "Trace file extension must be either .pcap, .cst.gz or .cst",
                 file=sys.stderr,
             )
             exit(1)
 
+    def upload_to_s3(self, form_data: str, trace_file: str) -> None:
+        fields = {}
+        if form_data:
+            fields = loads(form_data)
+            if "success_action_status" in fields:
+                fields["success_action_status"] = str(fields["success_action_status"])
+            if "x-amz-meta-filename" in fields:
+                fields["x-amz-meta-filename"] = basename(trace_file)
+
+        mime_type = self.mime_type(trace_file)
         query = ["curl"]
-        if self.ca_cert:
+        if self.ca_cert and not self.no_check_certificate:
             query += ["--cacert", self.ca_cert]
-        for (key, value) in fields.items():
-            query += ["--form", f"{key}={value}"]
-        query += [
-            "--form",
-            f"Content-Type={mime_type}",
-            "--form",
-            f"file=@{trace_file}",
-            self.object_storage_url,
-        ]
+        if self.no_check_certificate:
+            query += ["--insecure"]
+        query += ["-X", str(self.upload_method)]
+        if self.upload_method == UploadMethod.POST:
+            for key, value in fields.items():
+                query += ["--form", f"{key}={value}"]
+            query += [
+                "--form",
+                f"Content-Type={mime_type}",
+                "--form",
+                f"file=@{trace_file}",
+                self.object_storage_url,
+            ]
+        elif self.upload_method == UploadMethod.PUT:
+            query += [
+                "--header",
+                "Content-Type: application/octet-stream",
+                "--data-binary",
+                f"@{trace_file}",
+                self.object_storage_url,
+            ]
 
         response = run(query, capture_output=True)
-
         if response.returncode != 0:
             logger.error(
-                "Upload to object storage failed (status code: {response.returncode})"
+                f"Upload to object storage failed (status code: {response.returncode})"
             )
             exit(1)
 
-        xml_key = ElementTree.fromstring(response.stdout.decode()).find("Key")
-        assert xml_key is not None, "The storage backend sent an unexpected response."
-        self.key = xml_key.text
+        output = response.stdout.decode()
+        if self.upload_method == UploadMethod.POST:
+            try:
+                xml = ElementTree.fromstring(output)
+                if xml.tag == "Error":
+                    logger.error(
+                        f"Storage backend returned an error: \n{output}",
+                    )
+                    exit(1)
+            except ElementTree.ParseError:
+                logger.error(
+                    f"Unable to parse the response of the backend:\n{output}",
+                )
+                exit(1)
+            xml_key = xml.find("Key")
+            assert (
+                xml_key is not None
+            ), "The storage backend sent an unexpected response."
+            self.key = xml_key.text
+        else:
+            path = urlsplit(self.object_storage_url).path
+            self.key = "/".join(path.split("/")[-2:])
 
     def get_key(self) -> str:
         assert (
@@ -362,7 +464,12 @@ def main():
     parser.add_argument(
         "--verbose",
         action="store_true",
-        help="Trace or scan file to upload.",
+        help="Print out more detailed logging",
+    )
+    parser.add_argument(
+        "--no-check-certificate",
+        action="store_true",
+        help="Disable the certificate validation.",
     )
     parser.add_argument(
         "--trace-file",
@@ -398,6 +505,7 @@ def main():
     project_id = args.project_id
     profile_id = args.profile_id
     slot_name = args.slot_name
+    no_check_certificate = args.no_check_certificate
 
     initialize_logging(verbose=args.verbose)
 
@@ -406,12 +514,23 @@ def main():
     ca_cert = getenv("CS_CA_CERT")
 
     api_url = urljoin(root_url, "/api/v2")
-    api_client = CsApiClient(api_key=api_key, api_url=api_url, ca_cert=ca_cert)
+    api_client = CsApiClient(
+        api_key=api_key,
+        api_url=api_url,
+        ca_cert=ca_cert,
+        no_check_certificate=no_check_certificate,
+    )
 
-    (object_storage_url, form_data) = api_client.generate_trace_upload_post()
-    logger.info(f"Using object storage URL: {object_storage_url}")
-    s3_client = S3Client(object_storage_url=object_storage_url, ca_cert=ca_cert)
-    s3_client.upload_to_s3(form_data, trace_file_name)
+    upload_info = api_client.generate_trace_upload()
+    logger.debug(f"Using upload method {upload_info.method}")
+    s3_client = S3Client(
+        object_storage_url=upload_info.object_storage_url,
+        ca_cert=ca_cert,
+        no_check_certificate=no_check_certificate,
+        upload_method=upload_info.method,
+    )
+    logger.info(f"Using object storage URL: {upload_info.object_storage_url}")
+    s3_client.upload_to_s3(upload_info.form_data, trace_file_name)
     s3_key = s3_client.get_key()
 
     size = getsize(trace_file_name)
