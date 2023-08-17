@@ -75,6 +75,13 @@ class UploadMethod(Enum):
     POST = auto()
     PUT = auto()
 
+    def to_curl_value(self) -> str:
+        """
+        Return the method string to be used for the `-X` parameter in Curl.
+        """
+
+        return self.name
+
 
 @dataclass(frozen=True)
 class UploadInfo:
@@ -384,7 +391,7 @@ class S3Client:
             query += ["--cacert", self.ca_cert]
         if self.no_check_certificate:
             query += ["--insecure"]
-        query += ["-X", str(self.upload_method)]
+        query += ["-X", self.upload_method.to_curl_value()]
         if self.upload_method == UploadMethod.POST:
             for key, value in fields.items():
                 query += ["--form", f"{key}={value}"]
