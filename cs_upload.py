@@ -2,16 +2,14 @@ import argparse
 from base64 import b64decode, b64encode
 from collections import defaultdict
 from dataclasses import dataclass
-from enum import Enum, auto
-from json import decoder, dumps, loads
+import enum
+import json
 import logging
 import os
-from os import getenv
-from os.path import basename, getsize
 import re
-from subprocess import CompletedProcess, run
+import subprocess
 import sys
-from time import sleep
+import time
 from typing import Any, Mapping, Optional
 from urllib.parse import urljoin, urlsplit
 from xml.etree import ElementTree
@@ -71,9 +69,9 @@ def initialize_logging(verbose: bool) -> None:
     logging.basicConfig(level=level, handlers=[handler])
 
 
-class UploadMethod(Enum):
-    POST = auto()
-    PUT = auto()
+class UploadMethod(enum.Enum):
+    POST = enum.auto()
+    PUT = enum.auto()
 
     def to_curl_value(self) -> str:
         """
@@ -107,7 +105,7 @@ class GraphQLClient:
         self.ca_cert = ca_cert
         self.no_check_certificate = no_check_certificate
 
-    def _post(self, data: str) -> CompletedProcess:
+    def _post(self, data: str) -> subprocess.CompletedProcess:
         query = ["curl", "--request", "POST"]
         if self.ca_cert and not self.no_check_certificate:
             query += ["--cacert", f"{self.ca_cert}"]
@@ -122,7 +120,7 @@ class GraphQLClient:
             data,
             self.api_url,
         ]
-        return run(query, capture_output=True)
+        return subprocess.run(query, capture_output=True)
 
     def query(
         self, query: str, variables: Optional[Mapping[str, Any]] = None
@@ -131,7 +129,7 @@ class GraphQLClient:
             "query": query,
             "variables": variables,
         }
-        response = self._post(data=dumps(data))
+        response = self._post(data=json.dumps(data))
         if response.returncode != 0:
             logger.error(
                 f"System call to curl returned non-zero return code: {response.returncode}"
@@ -139,13 +137,13 @@ class GraphQLClient:
             exit(1)
 
         try:
-            response_json = loads(response.stdout.decode())
-        except decoder.JSONDecodeError:
+            response_json = json.loads(response.stdout.decode())
+        except json.decoder.JSONDecodeError:
             logging.error(f"Expected JSON response, got: {response.stdout}")
             raise
         if "errors" in response_json.keys():
             logger.error(
-                f"Unexpected GraphQL response: \n{dumps(response_json, indent=2)}"
+                f"Unexpected GraphQL response: \n{json.dumps(response_json, indent=2)}"
             )
             exit(1)
         return response_json["data"]
@@ -282,7 +280,7 @@ class CsApiClient:
     def wait_for_trace_done(self, trace_id: int) -> None:
         finished = False
         while not finished:
-            sleep(1)
+            time.sleep(1)
             logger.debug(f"Checking if trace upload is complete (ID: {trace_id})")
             result = self.graphql_client.query(
                 query="""
@@ -315,7 +313,7 @@ class CsApiClient:
     def wait_for_report_done(self, report_id: int) -> None:
         finished = False
         while not finished:
-            sleep(1)
+            time.sleep(1)
             logger.debug(f"Checking if report is complete (ID: {report_id})")
             result = self.graphql_client.query(
                 query="""
@@ -379,11 +377,11 @@ class S3Client:
     def upload_to_s3(self, form_data: str, trace_file: str) -> None:
         fields = {}
         if form_data:
-            fields = loads(form_data)
+            fields = json.loads(form_data)
             if "success_action_status" in fields:
                 fields["success_action_status"] = str(fields["success_action_status"])
             if "x-amz-meta-filename" in fields:
-                fields["x-amz-meta-filename"] = basename(trace_file)
+                fields["x-amz-meta-filename"] = os.path.basename(trace_file)
 
         mime_type = self.mime_type(trace_file)
         query = ["curl"]
@@ -411,7 +409,7 @@ class S3Client:
                 self.object_storage_url,
             ]
 
-        response = run(query, capture_output=True)
+        response = subprocess.run(query, capture_output=True)
         if response.returncode != 0:
             logger.error(
                 f"Upload to object storage failed (status code: {response.returncode})"
@@ -449,7 +447,7 @@ class S3Client:
 
 
 def getenv_or_exit(name: str) -> str:
-    result = getenv(name)
+    result = os.getenv(name)
     if result is None:
         exit(f"{name} is not defined")
     return result
@@ -518,7 +516,7 @@ def main():
 
     api_key = getenv_or_exit("CS_API_KEY")
     root_url = getenv_or_exit("CS_ROOT_URL")
-    ca_cert = getenv("CS_CA_CERT")
+    ca_cert = os.getenv("CS_CA_CERT")
 
     api_url = urljoin(root_url, "/api/v2")
     api_client = CsApiClient(
@@ -540,9 +538,9 @@ def main():
     s3_client.upload_to_s3(upload_info.form_data, trace_file_name)
     s3_key = s3_client.get_key()
 
-    size = getsize(trace_file_name)
+    size = os.path.getsize(trace_file_name)
     if trace_name is None:
-        trace_name = basename(trace_file_name)
+        trace_name = os.path.basename(trace_file_name)
 
     trace_id = api_client.create_trace(
         project_id=project_id,
