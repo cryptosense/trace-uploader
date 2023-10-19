@@ -220,7 +220,7 @@ class CsApiClient:
                 $name: String!,
                 $slotName: String,
                 $key: String!,
-                $size: Int!,
+                $size: BigInt!,
             ) {
                 createTrace(
                     input: {
