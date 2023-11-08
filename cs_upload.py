@@ -430,7 +430,14 @@ class S3Client:
                     f"Unable to parse the response of the backend:\n{output}",
                 )
                 exit(1)
-            xml_key = xml.find("Key")
+            # SeaweedFS object storage response includes XML namespace, while MinIO
+            # does not. Use regular expression to check if `xmlns="<VALUE>"` is present
+            # in reponse string and capture it.
+            xmlns = ""
+            match = re.search(r'xmlns="(?P<value>.*?)"', output)
+            if match is not None:
+                xmlns = f"{{{match.groupdict()['value']}}}"
+            xml_key = xml.find(f"{xmlns}Key")
             assert (
                 xml_key is not None
             ), "The storage backend sent an unexpected response."
