@@ -436,7 +436,7 @@ class S3Client:
             xmlns = ""
             match = re.search(r'xmlns="(?P<value>.*?)"', output)
             if match is not None:
-                xmlns = f"{{{match.groupdict()['value']}}}"
+                xmlns = f"{{{match.group('value')}}}"
             xml_key = xml.find(f"{xmlns}Key")
             assert (
                 xml_key is not None
