@@ -9,16 +9,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version:
-          - 3.9
+        python_version:
+          - '3.9'
         os:
           - ubuntu-22.04
     runs-on: ${{ matrix.os }}
     steps:
       - name: Setup python
-        uses: actions/setup-python@v3
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python_version }}
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - name: Install poetry
         run: |
           pip3 install poetry
