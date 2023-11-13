@@ -380,10 +380,9 @@ class S3Client:
             fields = json.loads(form_data)
             if "success_action_status" in fields:
                 fields["success_action_status"] = str(fields["success_action_status"])
-            if "x-amz-meta-filename" in fields:
-                fields["x-amz-meta-filename"] = os.path.basename(trace_file)
 
         mime_type = self.mime_type(trace_file)
+        filename = os.path.basename(trace_file)
         query = ["curl"]
         if self.ca_cert and not self.no_check_certificate:
             query += ["--cacert", self.ca_cert]
@@ -396,6 +395,8 @@ class S3Client:
             query += [
                 "--form",
                 f"Content-Type={mime_type}",
+                "--form",
+                f"x-amz-meta-filename={filename}",
                 "--form",
                 f"file=@{trace_file}",
                 self.object_storage_url,
