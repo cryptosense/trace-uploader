@@ -35,10 +35,10 @@ python cs_upload.py --trace-file foo.cst.gz ...
 
 - `--trace-file` (required): trace file to upload
 - `--trace-name` (optional): name of the trace created. Defaults to the file name.
-- `--project-number` (required): the number of the project to upload to. You can find this
+- `--project-id` (required): the number of the project to upload to. You can find this
   in the web UI if you navigate to that project and then look in the URL, for example in
   `https://[]/project/1022/dashboard`, the trace number is 1022.
-- `--profile-number` (optional): the number of the profile you want to use for generating a
+- `--profile-id` (optional): the number of the profile you want to use for generating a
   report. If this is not present, no report will be generated. To find the profile number
   you want, navigate to `/organization/profiles` and then select an appropriate profile.
   In `/organization/profiles/211` or `/organization/profiles/211/detail`, the profile
