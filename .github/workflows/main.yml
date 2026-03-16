@@ -12,19 +12,19 @@ jobs:
         python_version:
           - '3.9'
         os:
-          - ubuntu-22.04
+          - ubuntu-latest
     runs-on: ${{ matrix.os }}
     steps:
       - name: Setup python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python_version }}
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Install poetry
         run: |
           pip3 install poetry
       - name: Install dependencies
-        run: poetry install --no-interaction --no-root
+        run: poetry install --no-interaction
       - name: Run checks
         run: poetry run make check
